@@ -1,0 +1,30 @@
+// Release builds are unsigned unless all four local signing variables are set.
+// Never store a keystore or its credentials in the source tree.
+def signingVariables = [
+        storeFile: "KAIAGENTD_KEYSTORE",
+        storePassword: "KAIAGENTD_STORE_PASSWORD",
+        keyAlias: "KAIAGENTD_KEY_ALIAS",
+        keyPassword: "KAIAGENTD_KEY_PASSWORD"
+]
+def signingValues = signingVariables.collectEntries { key, variable ->
+    [(key): providers.environmentVariable(variable).orNull]
+}
+def supplied = signingValues.values().count { it != null && !it.isEmpty() }
+if (supplied > 0 && supplied != signingVariables.size()) {
+    throw new GradleException("Release signing requires all four KAIAGENTD signing environment variables. See README.md.")
+}
+if (supplied == signingVariables.size()) {
+    def keyStore = rootProject.file(signingValues.storeFile)
+    if (!keyStore.isFile()) {
+        throw new GradleException("KAIAGENTD_KEYSTORE must point to an existing local keystore.")
+    }
+    android.signingConfigs {
+        release {
+            storeFile keyStore
+            storePassword signingValues.storePassword
+            keyAlias signingValues.keyAlias
+            keyPassword signingValues.keyPassword
+        }
+    }
+    android.buildTypes.release.signingConfig = android.signingConfigs.release
+}

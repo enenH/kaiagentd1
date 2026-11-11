@@ -1,0 +1,431 @@
+#include "overlay_draw.h"
+
+#include <cmath>
+#include <algorithm>
+#include <cstring>
+
+namespace draw {
+
+namespace {
+
+enum ClipBits {
+    CLIP_LEFT = 1,
+    CLIP_RIGHT = 2,
+    CLIP_TOP = 4,
+    CLIP_BOTTOM = 8,
+};
+
+static int clipCode(double x, double y, int w, int h) {
+    int code = 0;
+    if (x < 0.0) code |= CLIP_LEFT;
+    else if (x > (double)(w - 1)) code |= CLIP_RIGHT;
+
+    if (y < 0.0) code |= CLIP_TOP;
+    else if (y > (double)(h - 1)) code |= CLIP_BOTTOM;
+    return code;
+}
+
+static bool clipLineToCanvas(int& x0, int& y0, int& x1, int& y1, int w, int h) {
+    if (w <= 0 || h <= 0) return false;
+
+    double x0d = x0, y0d = y0;
+    double x1d = x1, y1d = y1;
+    int code0 = clipCode(x0d, y0d, w, h);
+    int code1 = clipCode(x1d, y1d, w, h);
+
+    while (true) {
+        if ((code0 | code1) == 0) {
+            x0 = (int)lround(x0d);
+            y0 = (int)lround(y0d);
+            x1 = (int)lround(x1d);
+            y1 = (int)lround(y1d);
+            return true;
+        }
+        if (code0 & code1) return false;
+
+        double x = 0.0;
+        double y = 0.0;
+        int out = code0 ? code0 : code1;
+
+        if (out & CLIP_TOP) {
+            if (y1d == y0d) return false;
+            x = x0d + (x1d - x0d) * (0.0 - y0d) / (y1d - y0d);
+            y = 0.0;
+        } else if (out & CLIP_BOTTOM) {
+            if (y1d == y0d) return false;
+            x = x0d + (x1d - x0d) * ((double)(h - 1) - y0d) / (y1d - y0d);
+            y = (double)(h - 1);
+        } else if (out & CLIP_RIGHT) {
+            if (x1d == x0d) return false;
+            y = y0d + (y1d - y0d) * ((double)(w - 1) - x0d) / (x1d - x0d);
+            x = (double)(w - 1);
+        } else {
+            if (x1d == x0d) return false;
+            y = y0d + (y1d - y0d) * (0.0 - x0d) / (x1d - x0d);
+            x = 0.0;
+        }
+
+        if (out == code0) {
+            x0d = x;
+            y0d = y;
+            code0 = clipCode(x0d, y0d, w, h);
+        } else {
+            x1d = x;
+            y1d = y;
+            code1 = clipCode(x1d, y1d, w, h);
+        }
+    }
+}
+
+} // namespace
+
+/* ---- Bresenham's line algorithm ---- */
+
+void line(Canvas &c, int x0, int y0, int x1, int y1, uint32_t color)
+{
+    if (!clipLineToCanvas(x0, y0, x1, y1, c.width(), c.height()))
+        return;
+
+    long long dx = llabs((long long)x1 - x0);
+    long long dy = -llabs((long long)y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    long long err = dx + dy;
+
+    for (;;) {
+        c.blendPixel(x0, y0, color);
+        if (x0 == x1 && y0 == y1) break;
+        long long e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* ---- Rectangle ---- */
+
+void rect(Canvas &c, int x, int y, int w, int h, uint32_t color)
+{
+    line(c, x, y, x + w - 1, y, color);
+    line(c, x + w - 1, y, x + w - 1, y + h - 1, color);
+    line(c, x + w - 1, y + h - 1, x, y + h - 1, color);
+    line(c, x, y + h - 1, x, y, color);
+}
+
+void fillRect(Canvas &c, int x, int y, int w, int h, uint32_t color)
+{
+    for (int row = y; row < y + h; ++row)
+        c.hline(x, x + w - 1, row, color);
+}
+
+/* ---- Midpoint circle algorithm ---- */
+
+void circle(Canvas &c, int cx, int cy, int r, uint32_t color)
+{
+    int x = r, y = 0;
+    int d = 1 - r;
+
+    while (x >= y) {
+        c.blendPixel(cx + x, cy + y, color);
+        c.blendPixel(cx - x, cy + y, color);
+        c.blendPixel(cx + x, cy - y, color);
+        c.blendPixel(cx - x, cy - y, color);
+        c.blendPixel(cx + y, cy + x, color);
+        c.blendPixel(cx - y, cy + x, color);
+        c.blendPixel(cx + y, cy - x, color);
+        c.blendPixel(cx - y, cy - x, color);
+
+        y++;
+        if (d <= 0) {
+            d += 2 * y + 1;
+        } else {
+            x--;
+            d += 2 * (y - x) + 1;
+        }
+    }
+}
+
+void fillCircle(Canvas &c, int cx, int cy, int r, uint32_t color)
+{
+    int x = r, y = 0;
+    int d = 1 - r;
+
+    while (x >= y) {
+        c.hline(cx - x, cx + x, cy + y, color);
+        c.hline(cx - x, cx + x, cy - y, color);
+        c.hline(cx - y, cx + y, cy + x, color);
+        c.hline(cx - y, cx + y, cy - x, color);
+
+        y++;
+        if (d <= 0) {
+            d += 2 * y + 1;
+        } else {
+            x--;
+            d += 2 * (y - x) + 1;
+        }
+    }
+}
+
+/* ---- Triangle ---- */
+
+void triangle(Canvas &c, int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color)
+{
+    line(c, x0, y0, x1, y1, color);
+    line(c, x1, y1, x2, y2, color);
+    line(c, x2, y2, x0, y0, color);
+}
+
+void fillTriangle(Canvas &c, int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color)
+{
+    /* Sort vertices by Y */
+    if (y0 > y1) { std::swap(x0, x1); std::swap(y0, y1); }
+    if (y0 > y2) { std::swap(x0, x2); std::swap(y0, y2); }
+    if (y1 > y2) { std::swap(x1, x2); std::swap(y1, y2); }
+
+    if (y2 == y0) {
+        c.hline(std::min({x0, x1, x2}), std::max({x0, x1, x2}), y0, color);
+        return;
+    }
+
+    auto interpolateX = [](int y, int x0, int y0, int x1, int y1) -> int {
+        if (y1 == y0) return x0;
+        return x0 + (int)((long)(x1 - x0) * (y - y0) / (y1 - y0));
+    };
+
+    for (int y = y0; y <= y2; ++y) {
+        int xa, xb;
+
+        if (y <= y1) {
+            xa = interpolateX(y, x0, y0, x2, y2);
+            xb = interpolateX(y, x0, y0, x1, y1);
+        } else {
+            xa = interpolateX(y, x0, y0, x2, y2);
+            xb = interpolateX(y, x1, y1, x2, y2);
+        }
+
+        if (xa > xb) std::swap(xa, xb);
+        c.hline(xa, xb, y, color);
+    }
+}
+
+/* ---- Rounded Rectangle ---- */
+
+void roundRect(Canvas &c, int x, int y, int w, int h, int r, uint32_t color)
+{
+    r = std::min(r, std::min(w / 2, h / 2));
+
+    /* Straight edges */
+    line(c, x + r, y, x + w - 1 - r, y, color);             /* top */
+    line(c, x + r, y + h - 1, x + w - 1 - r, y + h - 1, color); /* bottom */
+    line(c, x, y + r, x, y + h - 1 - r, color);             /* left */
+    line(c, x + w - 1, y + r, x + w - 1, y + h - 1 - r, color); /* right */
+
+    /* Corner arcs (midpoint circle, only draw relevant octant) */
+    int cx, cy;
+    int px = r, py = 0;
+    int d = 1 - r;
+
+    while (px >= py) {
+        /* Top-left */
+        cx = x + r; cy = y + r;
+        c.blendPixel(cx - px, cy - py, color);
+        c.blendPixel(cx - py, cy - px, color);
+
+        /* Top-right */
+        cx = x + w - 1 - r; cy = y + r;
+        c.blendPixel(cx + px, cy - py, color);
+        c.blendPixel(cx + py, cy - px, color);
+
+        /* Bottom-left */
+        cx = x + r; cy = y + h - 1 - r;
+        c.blendPixel(cx - px, cy + py, color);
+        c.blendPixel(cx - py, cy + px, color);
+
+        /* Bottom-right */
+        cx = x + w - 1 - r; cy = y + h - 1 - r;
+        c.blendPixel(cx + px, cy + py, color);
+        c.blendPixel(cx + py, cy + px, color);
+
+        py++;
+        if (d <= 0) {
+            d += 2 * py + 1;
+        } else {
+            px--;
+            d += 2 * (py - px) + 1;
+        }
+    }
+}
+
+void fillRoundRect(Canvas &c, int x, int y, int w, int h, int r, uint32_t color)
+{
+    r = std::min(r, std::min(w / 2, h / 2));
+
+    /* Fill center + side bands as full scanlines */
+    for (int row = y + r; row <= y + h - 1 - r; ++row)
+        c.hline(x, x + w - 1, row, color);
+
+    /* Fill top and bottom bands with rounded corners */
+    int px = r, py = 0;
+    int d = 1 - r;
+
+    while (px >= py) {
+        /* Top band: two scanlines at y+r-py and y+r-px */
+        c.hline(x + r - px, x + w - 1 - r + px, y + r - py, color);
+        c.hline(x + r - py, x + w - 1 - r + py, y + r - px, color);
+
+        /* Bottom band: two scanlines */
+        c.hline(x + r - px, x + w - 1 - r + px, y + h - 1 - r + py, color);
+        c.hline(x + r - py, x + w - 1 - r + py, y + h - 1 - r + px, color);
+
+        py++;
+        if (d <= 0) {
+            d += 2 * py + 1;
+        } else {
+            px--;
+            d += 2 * (py - px) + 1;
+        }
+    }
+}
+
+/* ---- Built-in 8x8 bitmap font ---- */
+
+/*
+ * Minimal 8x8 ASCII bitmap font covering printable characters 32-126.
+ * Each character is 8 bytes, one byte per row, MSB is leftmost pixel.
+ */
+static const uint8_t FONT_8X8[][8] = {
+    /* 32 ' ' */ {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    /* 33 '!' */ {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00},
+    /* 34 '"' */ {0x6C,0x6C,0x24,0x00,0x00,0x00,0x00,0x00},
+    /* 35 '#' */ {0x6C,0x6C,0xFE,0x6C,0xFE,0x6C,0x6C,0x00},
+    /* 36 '$' */ {0x18,0x3E,0x60,0x3C,0x06,0x7C,0x18,0x00},
+    /* 37 '%' */ {0x00,0xC6,0xCC,0x18,0x30,0x66,0xC6,0x00},
+    /* 38 '&' */ {0x38,0x6C,0x38,0x76,0xDC,0xCC,0x76,0x00},
+    /* 39 ''' */ {0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00},
+    /* 40 '(' */ {0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00},
+    /* 41 ')' */ {0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00},
+    /* 42 '*' */ {0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00},
+    /* 43 '+' */ {0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00},
+    /* 44 ',' */ {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30},
+    /* 45 '-' */ {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00},
+    /* 46 '.' */ {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00},
+    /* 47 '/' */ {0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00},
+    /* 48 '0' */ {0x7C,0xC6,0xCE,0xD6,0xE6,0xC6,0x7C,0x00},
+    /* 49 '1' */ {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00},
+    /* 50 '2' */ {0x7C,0xC6,0x06,0x1C,0x30,0x60,0xFE,0x00},
+    /* 51 '3' */ {0x7C,0xC6,0x06,0x3C,0x06,0xC6,0x7C,0x00},
+    /* 52 '4' */ {0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x0C,0x00},
+    /* 53 '5' */ {0xFE,0xC0,0xFC,0x06,0x06,0xC6,0x7C,0x00},
+    /* 54 '6' */ {0x38,0x60,0xC0,0xFC,0xC6,0xC6,0x7C,0x00},
+    /* 55 '7' */ {0xFE,0xC6,0x0C,0x18,0x30,0x30,0x30,0x00},
+    /* 56 '8' */ {0x7C,0xC6,0xC6,0x7C,0xC6,0xC6,0x7C,0x00},
+    /* 57 '9' */ {0x7C,0xC6,0xC6,0x7E,0x06,0x0C,0x78,0x00},
+    /* 58 ':' */ {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00},
+    /* 59 ';' */ {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x30},
+    /* 60 '<' */ {0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x00},
+    /* 61 '=' */ {0x00,0x00,0x7E,0x00,0x7E,0x00,0x00,0x00},
+    /* 62 '>' */ {0x60,0x30,0x18,0x0C,0x18,0x30,0x60,0x00},
+    /* 63 '?' */ {0x7C,0xC6,0x0C,0x18,0x18,0x00,0x18,0x00},
+    /* 64 '@' */ {0x7C,0xC6,0xDE,0xDE,0xDE,0xC0,0x78,0x00},
+    /* 65 'A' */ {0x38,0x6C,0xC6,0xC6,0xFE,0xC6,0xC6,0x00},
+    /* 66 'B' */ {0xFC,0x66,0x66,0x7C,0x66,0x66,0xFC,0x00},
+    /* 67 'C' */ {0x3C,0x66,0xC0,0xC0,0xC0,0x66,0x3C,0x00},
+    /* 68 'D' */ {0xF8,0x6C,0x66,0x66,0x66,0x6C,0xF8,0x00},
+    /* 69 'E' */ {0xFE,0x62,0x68,0x78,0x68,0x62,0xFE,0x00},
+    /* 70 'F' */ {0xFE,0x62,0x68,0x78,0x68,0x60,0xF0,0x00},
+    /* 71 'G' */ {0x3C,0x66,0xC0,0xC0,0xCE,0x66,0x3E,0x00},
+    /* 72 'H' */ {0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00},
+    /* 73 'I' */ {0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00},
+    /* 74 'J' */ {0x1E,0x0C,0x0C,0x0C,0xCC,0xCC,0x78,0x00},
+    /* 75 'K' */ {0xE6,0x66,0x6C,0x78,0x6C,0x66,0xE6,0x00},
+    /* 76 'L' */ {0xF0,0x60,0x60,0x60,0x62,0x66,0xFE,0x00},
+    /* 77 'M' */ {0xC6,0xEE,0xFE,0xFE,0xD6,0xC6,0xC6,0x00},
+    /* 78 'N' */ {0xC6,0xE6,0xF6,0xDE,0xCE,0xC6,0xC6,0x00},
+    /* 79 'O' */ {0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00},
+    /* 80 'P' */ {0xFC,0x66,0x66,0x7C,0x60,0x60,0xF0,0x00},
+    /* 81 'Q' */ {0x7C,0xC6,0xC6,0xC6,0xD6,0xDE,0x7C,0x0E},
+    /* 82 'R' */ {0xFC,0x66,0x66,0x7C,0x6C,0x66,0xE6,0x00},
+    /* 83 'S' */ {0x7C,0xC6,0x60,0x38,0x0C,0xC6,0x7C,0x00},
+    /* 84 'T' */ {0x7E,0x5A,0x18,0x18,0x18,0x18,0x3C,0x00},
+    /* 85 'U' */ {0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00},
+    /* 86 'V' */ {0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x10,0x00},
+    /* 87 'W' */ {0xC6,0xC6,0xD6,0xFE,0xFE,0xEE,0xC6,0x00},
+    /* 88 'X' */ {0xC6,0xC6,0x6C,0x38,0x6C,0xC6,0xC6,0x00},
+    /* 89 'Y' */ {0x66,0x66,0x66,0x3C,0x18,0x18,0x3C,0x00},
+    /* 90 'Z' */ {0xFE,0xC6,0x8C,0x18,0x32,0x66,0xFE,0x00},
+    /* 91 '[' */ {0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00},
+    /* 92 '\' */ {0xC0,0x60,0x30,0x18,0x0C,0x06,0x02,0x00},
+    /* 93 ']' */ {0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00},
+    /* 94 '^' */ {0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00},
+    /* 95 '_' */ {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF},
+    /* 96 '`' */ {0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00},
+    /* 97 'a' */ {0x00,0x00,0x78,0x0C,0x7C,0xCC,0x76,0x00},
+    /* 98 'b' */ {0xE0,0x60,0x7C,0x66,0x66,0x66,0xDC,0x00},
+    /* 99 'c' */ {0x00,0x00,0x7C,0xC6,0xC0,0xC6,0x7C,0x00},
+    /*100 'd' */ {0x1C,0x0C,0x7C,0xCC,0xCC,0xCC,0x76,0x00},
+    /*101 'e' */ {0x00,0x00,0x7C,0xC6,0xFE,0xC0,0x7C,0x00},
+    /*102 'f' */ {0x1C,0x36,0x30,0x78,0x30,0x30,0x78,0x00},
+    /*103 'g' */ {0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0xF8},
+    /*104 'h' */ {0xE0,0x60,0x6C,0x76,0x66,0x66,0xE6,0x00},
+    /*105 'i' */ {0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00},
+    /*106 'j' */ {0x06,0x00,0x06,0x06,0x06,0x66,0x66,0x3C},
+    /*107 'k' */ {0xE0,0x60,0x66,0x6C,0x78,0x6C,0xE6,0x00},
+    /*108 'l' */ {0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00},
+    /*109 'm' */ {0x00,0x00,0xEC,0xFE,0xD6,0xC6,0xC6,0x00},
+    /*110 'n' */ {0x00,0x00,0xDC,0x66,0x66,0x66,0x66,0x00},
+    /*111 'o' */ {0x00,0x00,0x7C,0xC6,0xC6,0xC6,0x7C,0x00},
+    /*112 'p' */ {0x00,0x00,0xDC,0x66,0x66,0x7C,0x60,0xF0},
+    /*113 'q' */ {0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0x1E},
+    /*114 'r' */ {0x00,0x00,0xDC,0x76,0x60,0x60,0xF0,0x00},
+    /*115 's' */ {0x00,0x00,0x7C,0xC0,0x7C,0x06,0xFC,0x00},
+    /*116 't' */ {0x10,0x30,0x7C,0x30,0x30,0x34,0x18,0x00},
+    /*117 'u' */ {0x00,0x00,0xCC,0xCC,0xCC,0xCC,0x76,0x00},
+    /*118 'v' */ {0x00,0x00,0xC6,0xC6,0xC6,0x6C,0x38,0x00},
+    /*119 'w' */ {0x00,0x00,0xC6,0xC6,0xD6,0xFE,0x6C,0x00},
+    /*120 'x' */ {0x00,0x00,0xC6,0x6C,0x38,0x6C,0xC6,0x00},
+    /*121 'y' */ {0x00,0x00,0xC6,0xC6,0xCE,0x76,0x06,0xFC},
+    /*122 'z' */ {0x00,0x00,0xFC,0x98,0x30,0x64,0xFC,0x00},
+    /*123 '{' */ {0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00},
+    /*124 '|' */ {0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00},
+    /*125 '}' */ {0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00},
+    /*126 '~' */ {0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00},
+};
+
+void text(Canvas &c, int x, int y, const char *str, uint32_t color, int scale)
+{
+    if (scale < 1) scale = 1;
+
+    int px = x;
+    for (const char *p = str; *p; ++p) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch == '\n') {
+            px = x;
+            y += 8 * scale;
+            continue;
+        }
+
+        if (ch < 32 || ch > 126)
+            ch = '?';
+
+        const uint8_t *glyph = FONT_8X8[ch - 32];
+
+        for (int row = 0; row < 8; ++row) {
+            uint8_t bits = glyph[row];
+            for (int col = 0; col < 8; ++col) {
+                if (bits & (0x80 >> col)) {
+                    if (scale == 1) {
+                        c.blendPixel(px + col, y + row, color);
+                    } else {
+                        for (int sy = 0; sy < scale; ++sy)
+                            for (int sx = 0; sx < scale; ++sx)
+                                c.blendPixel(px + col * scale + sx,
+                                             y + row * scale + sy, color);
+                    }
+                }
+            }
+        }
+
+        px += 8 * scale;
+    }
+}
+
+} // namespace draw

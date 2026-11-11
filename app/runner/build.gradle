@@ -1,0 +1,127 @@
+plugins {
+    id "com.android.application"
+    id "org.lsposed.lsparanoid"
+}
+
+lsparanoid {
+    seed = null
+    includeDependencies = true
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.isFile()) {
+    localPropertiesFile.withInputStream { localProperties.load(it) }
+}
+def localCmake = localProperties.getProperty("kaiagentd.cmake", "cmake")
+def cmakeExe = providers.gradleProperty("kaiagentd.cmake").orElse(localCmake)
+def ndkDir = providers.gradleProperty("kaiagentd.ndk")
+        .orElse(providers.environmentVariable("ANDROID_NDK_HOME"))
+        .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
+def nativeGenerator = providers.gradleProperty("kaiagentd.generator").orElse("Ninja")
+def nativeBuildType = providers.gradleProperty("kaiagentd.buildType").orElse("Debug")
+def nativeAbi = providers.gradleProperty("kaiagentd.abi").orElse("arm64-v8a")
+def prebuiltBinaryPath = providers.gradleProperty("kaiagentd.prebuiltBinary").orNull
+def repoRoot = rootProject.projectDir.parentFile
+def nativeBuildDir = new File(repoRoot, providers.gradleProperty("kaiagentd.buildDir").orElse("cmake-build-debug").get())
+def nativeBinary = new File(nativeBuildDir, "libkaiagentd.so")
+def runnerBinary = prebuiltBinaryPath ? file(prebuiltBinaryPath) : nativeBinary
+if (prebuiltBinaryPath && !runnerBinary.isFile()) {
+    throw new GradleException("The -Pkaiagentd.prebuiltBinary path must point to an existing native executable.")
+}
+def generatedJniLibs = layout.buildDirectory.dir("generated/jniLibs/kaiagentd")
+
+android {
+    namespace "com.enenh.ai.runner"
+    compileSdk rootProject.ext.appCompileSdk
+
+    defaultConfig {
+        applicationId "com.enenh.ai.runner"
+        minSdk rootProject.ext.appMinSdk
+        targetSdk rootProject.ext.appCompileSdk
+        versionCode 1
+        versionName "1.0"
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = [generatedJniLibs]
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += ["**/*.so"]
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.register("configureKaiagentd", Exec) {
+    workingDir repoRoot
+    def args = [
+            cmakeExe.get(),
+            "-G", nativeGenerator.get(),
+            "-S", repoRoot.absolutePath,
+            "-B", nativeBuildDir.absolutePath,
+            "-DCMAKE_BUILD_TYPE=${nativeBuildType.get()}"
+    ]
+    if (ndkDir.present) {
+        def ndkPath = ndkDir.get()
+        args += [
+                "-DCMAKE_ANDROID_NDK=${ndkPath}",
+                "-DCMAKE_TOOLCHAIN_FILE=${ndkPath}/build/cmake/android.toolchain.cmake",
+                "-DCMAKE_SYSTEM_NAME=Android",
+                "-DCMAKE_SYSTEM_VERSION=34",
+                "-DCMAKE_ANDROID_ARCH_ABI=${nativeAbi.get()}",
+                "-DANDROID_ABI=${nativeAbi.get()}",
+                "-DANDROID_PLATFORM=android-34"
+        ]
+    }
+    commandLine args
+}
+
+tasks.register("buildKaiagentd", Exec) {
+    dependsOn "configureKaiagentd"
+    workingDir repoRoot
+    commandLine cmakeExe.get(), "--build", nativeBuildDir.absolutePath,
+            "--target", "kaiagentd", "--parallel"
+}
+
+tasks.register("prepareRunnerNativeLib", Copy) {
+    if (!prebuiltBinaryPath) {
+        dependsOn "buildKaiagentd"
+    }
+    doFirst {
+        if (!runnerBinary.isFile()) {
+            throw new GradleException("Native binary not found: ${runnerBinary}. Build kaiagentd first or supply a valid -Pkaiagentd.prebuiltBinary path.")
+        }
+    }
+    from runnerBinary
+    rename { "libkaiagentd.so" }
+    into generatedJniLibs.map { it.dir(nativeAbi.get()) }
+}
+
+tasks.named("preBuild") {
+    dependsOn "prepareRunnerNativeLib"
+}
+
+apply from: rootProject.file("release-signing.gradle")
+
+dependencies {
+    implementation project(":shizuku-common")
+}

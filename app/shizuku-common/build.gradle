@@ -1,0 +1,27 @@
+plugins {
+    id "com.android.library"
+}
+
+android {
+    namespace "com.enenh.ai.shizuku"
+    compileSdk rootProject.ext.appCompileSdk
+
+    defaultConfig {
+        minSdk rootProject.ext.appMinSdk
+    }
+
+    buildFeatures {
+        aidl true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    api "dev.rikka.shizuku:api:${rootProject.ext.shizukuVersion}"
+    api "dev.rikka.shizuku:provider:${rootProject.ext.shizukuVersion}"
+    api "androidx.annotation:annotation:1.3.0"
+}

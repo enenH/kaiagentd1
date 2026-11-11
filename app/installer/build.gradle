@@ -1,0 +1,59 @@
+plugins {
+    id "com.android.application"
+    id "org.lsposed.lsparanoid"
+}
+
+lsparanoid {
+    seed = null
+    includeDependencies = true
+}
+
+
+android {
+    namespace "com.enenh.ai.installer"
+    compileSdk rootProject.ext.appCompileSdk
+
+    defaultConfig {
+        applicationId "com.enenh.ai.installer"
+        minSdk rootProject.ext.appMinSdk
+        targetSdk rootProject.ext.appCompileSdk
+        versionCode 1
+        versionName "1.0"
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs = [rootProject.file("../lib/arm64-v8a")]
+        }
+    }
+
+    androidResources {
+        noCompress += ["so", "tflite"]
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ["**/*.so"]
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+apply from: rootProject.file("release-signing.gradle")
+
+dependencies {
+    implementation project(":shizuku-common")
+}

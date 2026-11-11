@@ -1,0 +1,67 @@
+# Build outputs
+.gradle/
+.cxx/
+.externalNativeBuild/
+cmake-build-*/
+build/
+out/
+dist/
+*.apk
+*.aab
+*.apks
+*.aar
+*.o
+*.a
+
+# Runtime libraries and models must be supplied locally.
+lib/arm64-v8a/*
+!lib/arm64-v8a/README.md
+*.so
+*.tflite
+
+# Signing keys and local credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+keystore.properties
+signing.properties
+credentials.json
+secrets.json
+token.json
+tokens.json
+*.credentials
+
+# IDE/editor and machine-local configuration
+.idea/
+.vs/
+.vscode/
+local.properties
+*.user
+*.suo
+*.sln.docstates
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Makefile
+
+# Device captures, logs and temporary files
+*.log
+*.tmp
+*.pid
+*.raw
+*.rgb
+*.rgba
+captures/
+qnn_cache/
+Thumbs.db
+Desktop.ini
+.DS_Store

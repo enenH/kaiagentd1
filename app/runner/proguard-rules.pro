@@ -1,0 +1,6 @@
+-keep class com.enenh.ai.shizuku.IPrivilegedService { *; }
+-keep class com.enenh.ai.shizuku.IPrivilegedService$Stub { *; }
+-keep class com.enenh.ai.shizuku.IPrivilegedService$Stub$Proxy { *; }
+-keep class com.enenh.ai.shizuku.PrivilegedService { *; }
+-keep class rikka.shizuku.** { *; }
+-dontwarn rikka.shizuku.**

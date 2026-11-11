@@ -1,0 +1,90 @@
+name: Build Android APKs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'src/**'
+      - 'include/**'
+      - 'scripts/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/build-runner.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apps:
+    name: Build Android APKs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check public source tree
+        run: python3 scripts/check_public_tree.py
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865" \
+            "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "${ANDROID_HOME}/cmake/3.22.1/bin" >> "$GITHUB_PATH"
+
+      - name: Build native executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B cmake-build-actions -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_ANDROID_NDK="$ANDROID_NDK_HOME" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-34
+          cmake --build cmake-build-actions --target kaiagentd --parallel 2
+          test -f cmake-build-actions/libkaiagentd.so
+
+      - name: Build debug and unsigned release APKs
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon \
+            :installer:assembleDebug :runner:assembleDebug \
+            :installer:assembleRelease :runner:assembleRelease \
+            "-Pkaiagentd.prebuiltBinary=${GITHUB_WORKSPACE}/cmake-build-actions/libkaiagentd.so"
+
+      - name: Upload APKs and native executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaiagentd1-build-${{ github.sha }}
+          path: |
+            app/installer/build/outputs/apk/**/*.apk
+            app/runner/build/outputs/apk/**/*.apk
+            cmake-build-actions/libkaiagentd.so
+          if-no-files-found: error
+          retention-days: 14
