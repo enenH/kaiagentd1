@@ -131,7 +131,23 @@ git diff --cached --check
 
 检查器用于拦截已知类型的敏感文件、凭据和遗留授权实现，不替代人工审查，也不验证模型或第三方二进制的许可。
 
-GitHub Actions 会执行公开源码检查、构建 ARM64 原生程序及 Debug / unsigned Release APK，并将构建产物上传到该次工作流运行。CI 不依赖私有保护工具、外部消息服务或项目签名密钥。Android 设备上的采集、推理、绘制与触控行为仍需实机测试。
+GitHub Actions 对每次 push 触发构建，不设置分支、标签或文件路径过滤，也不会自动取消此前的构建。可以在 Actions 页面手动运行；Pull Request 会执行编译检查。
+
+push 或手动运行构建成功后，产物直接发布到 [GitHub Releases](https://github.com/enenH/kaiagentd1/releases)，不上传 Actions Artifacts。每次运行使用独立标签 `build-<构建编号>-<尝试编号>-<12位提交号>`，标签指向本次实际构建的提交；首次尝试编号为 1。重跑会创建新版本，已发布的文件不会被覆盖。默认分支当前提交的成功构建会标记为 Latest。删除分支或标签的事件不发布 Release。
+
+每个 Release 提供：
+
+| 文件 | 内容 |
+| --- | --- |
+| `kaiagentd1-installer-debug.apk` | Installer 调试 APK |
+| `kaiagentd1-runner-debug.apk` | Runner 调试 APK |
+| `kaiagentd1-installer-release-unsigned.apk` | Installer 未签名 Release APK |
+| `kaiagentd1-runner-release-unsigned.apk` | Runner 未签名 Release APK |
+| `libkaiagentd.so` | ARM64 原生可执行程序 |
+| `licenses.zip` | 项目和第三方许可证说明 |
+| `SHA256SUMS` | 上述六个文件的 SHA-256 校验值 |
+
+发布使用 GitHub 自动提供的 `GITHUB_TOKEN` 和工作流的 `contents: write` 权限，无需额外配置 PAT。Pull Request 不发布 Release。CI 不依赖私有保护工具、外部消息服务或项目签名密钥。Android 设备上的采集、推理、绘制与触控行为仍需实机测试。
 
 ## 许可证
 

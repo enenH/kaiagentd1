@@ -1,28 +1,16 @@
-name: Build Android APKs
+name: Build and publish Android release
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - 'app/**'
-      - 'src/**'
-      - 'include/**'
-      - 'scripts/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/build-runner.yml'
   pull_request:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
   build-apps:
-    name: Build Android APKs
+    name: Build APKs and publish Release
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -81,13 +69,72 @@ jobs:
             :installer:assembleRelease :runner:assembleRelease \
             "-Pkaiagentd.prebuiltBinary=${GITHUB_WORKSPACE}/cmake-build-actions/libkaiagentd.so"
 
-      - name: Upload APKs and native executable
-        uses: actions/upload-artifact@v4
-        with:
-          name: kaiagentd1-build-${{ github.sha }}
-          path: |
-            app/installer/build/outputs/apk/**/*.apk
-            app/runner/build/outputs/apk/**/*.apk
-            cmake-build-actions/libkaiagentd.so
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish GitHub Release
+        if: (github.event_name == 'push' && github.event.deleted != true) || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          release_dir="${RUNNER_TEMP}/kaiagentd-release"
+          mkdir -p "$release_dir"
+          shopt -s nullglob
+          for module in installer runner; do
+            for variant in debug release; do
+              apks=("app/${module}/build/outputs/apk/${variant}/"*.apk)
+              if (( ${#apks[@]} != 1 )); then
+                echo "Expected exactly one ${module} ${variant} APK; found ${#apks[@]}." >&2
+                exit 1
+              fi
+              suffix="$variant"
+              if [[ "$variant" == release ]]; then
+                suffix="release-unsigned"
+              fi
+              test -s "${apks[0]}"
+              cp "${apks[0]}" "$release_dir/kaiagentd1-${module}-${suffix}.apk"
+            done
+          done
+          test -s cmake-build-actions/libkaiagentd.so
+          cp cmake-build-actions/libkaiagentd.so "$release_dir/libkaiagentd.so"
+          python3 -m zipfile -c "$release_dir/licenses.zip" LICENSE THIRD_PARTY_NOTICES.md licenses
+          (
+            cd "$release_dir"
+            sha256sum ./*.apk ./libkaiagentd.so ./licenses.zip > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+          release_tag="build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:12}"
+          notes_file="${RUNNER_TEMP}/kaiagentd-release-notes.md"
+          {
+            printf '# Automated Android build\n\n'
+            printf 'Commit: [%s](%s/%s/commit/%s)\n\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GH_REPO" "$GITHUB_SHA"
+            printf 'Source ref: `%s`\n\n' "$GITHUB_REF_NAME"
+            printf 'Build: %s/%s/actions/runs/%s\n\n' "$GITHUB_SERVER_URL" "$GH_REPO" "$GITHUB_RUN_ID"
+            printf '%s\n' \
+              '- Installer and Runner: debug APKs and unsigned release APKs.' \
+              '- Native ARM64 executable: libkaiagentd.so.' \
+              '- SHA256SUMS verifies all six downloadable payload files.' \
+              '- licenses.zip contains the project and third-party license notices.' \
+              '' \
+              'Release APKs require your own signature before installation.' \
+              'Runtime libraries and model weights are supplied separately; see lib/arm64-v8a/README.md.'
+          } > "$notes_file"
+
+          # With assets, gh uploads to a draft before publishing the complete release.
+          gh release create "$release_tag" "$release_dir"/* \
+            --target "$GITHUB_SHA" \
+            --title "Build ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT} (${GITHUB_SHA:0:12})" \
+            --notes-file "$notes_file" \
+            --latest=false
+
+          # A slower, superseded build must not replace the default branch's latest release.
+          if [[ "$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}" ]]; then
+            current_head="$(gh api "repos/${GH_REPO}/git/ref/heads/${DEFAULT_BRANCH}" --jq '.object.sha')"
+            if [[ "$current_head" == "$GITHUB_SHA" ]]; then
+              gh release edit "$release_tag" --latest
+            fi
+          fi
+          printf '### Release published\n\n[%s](%s/%s/releases/tag/%s)\n' \
+            "$release_tag" "$GITHUB_SERVER_URL" "$GH_REPO" "$release_tag" >> "$GITHUB_STEP_SUMMARY"
